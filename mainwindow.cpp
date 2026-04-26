@@ -42,10 +42,12 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     });
 
     auto tcpserver = new QTcpServer();
-    if (!tcpserver->listen(QHostAddress::Any, 8000) || !server->bind(tcpserver)) {
+    if (!tcpserver->listen(QHostAddress::Any, 8000))
+    {
         delete tcpserver;
         delete server;
     }
+    server->bind(tcpserver);
 
 #endif
 
