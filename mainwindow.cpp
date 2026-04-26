@@ -4,6 +4,11 @@
 #include <QWebSocket>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QFile>
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+#include <QHttpServer>
+#include <QTcpServer>
+#endif
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWindow), socket(nullptr)
 {
@@ -23,6 +28,28 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     server = new QWebSocketServer("terminal-ws", QWebSocketServer::NonSecureMode, this);
     server->listen(QHostAddress::Any, 12345);
     connect(server, &QWebSocketServer::newConnection , this, &MainWindow::onNewConnection);
+
+
+#if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
+    auto server = new QHttpServer(this);
+
+    server->route("/", [] () {
+        QFile f(":/index.html");
+        f.open(QIODevice::ReadOnly);
+        const auto str = f.readAll();
+        f.close();
+        return QString::fromUtf8(str);
+    });
+
+    auto tcpserver = new QTcpServer();
+    if (!tcpserver->listen(QHostAddress::Any, 8000) || !server->bind(tcpserver)) {
+        delete tcpserver;
+        delete server;
+    }
+
+#endif
+
+
 }
 
 MainWindow::~MainWindow()
@@ -56,16 +83,19 @@ void MainWindow::onSocketMessage(const QByteArray &data)
 {
     if(!grabber){ return; }
 
-    QJsonParseError err;
-    QJsonDocument doc = QJsonDocument::fromJson(data, &err);
-    QString action;
-    if(err.error == QJsonParseError::NoError){
-        auto obj  = doc.object();
-        action = obj["action"].toString();
-        if(action == QStringLiteral("resize"))
-        {
-            grabber->setTerminalSize(obj["rows"].toInt(), obj["cols"].toInt());
-            return;
+    if(data.startsWith("{") && data.endsWith("}"))
+    {
+        QJsonParseError err;
+        QJsonDocument doc = QJsonDocument::fromJson(data, &err);
+        QString action;
+        if(err.error == QJsonParseError::NoError){
+            auto obj  = doc.object();
+            action = obj["action"].toString();
+            if(action == QStringLiteral("resize"))
+            {
+                grabber->setTerminalSize(obj["rows"].toInt(), obj["cols"].toInt());
+                return;
+            }
         }
     }
     grabber->sendInput(data);
