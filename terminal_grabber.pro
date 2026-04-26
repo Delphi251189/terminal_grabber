@@ -1,17 +1,17 @@
 QT          += core gui widgets network websockets
 CONFIG      += c++11
-HEADERS     +=  qterminalgrabber.h \
-    mainwindow.h
-SOURCES     += main.cpp \
-    mainwindow.cpp
+HEADERS     +=  qterminalgrabber.h mainwindow.h
+SOURCES     += main.cpp  mainwindow.cpp
 
 
 linux:!android {
     SOURCES += qterminalgrabber_linux.cpp
 }
 
-FORMS += \
-    mainwindow.ui
+osx {
+    SOURCES += qterminalgrabber_osx.cpp
+}
 
-DISTFILES += \
-    index.html
+
+FORMS       += mainwindow.ui
+DISTFILES   += index.html

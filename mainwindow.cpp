@@ -9,7 +9,13 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
 {
     ui->setupUi(this);
     grabber = new QTerminalGrabber(this);
+#if defined(Q_OS_OSX)
+    grabber->startShell("/bin/zsh");
+#elif defined(Q_OS_UNIX)
     grabber->startShell("/bin/bash");
+#else
+
+#endif
     connect(grabber, &QTerminalGrabber::readyRead, this, &MainWindow::onGrabberMessage);
 
     server = new QWebSocketServer("terminal-ws", QWebSocketServer::NonSecureMode, this);
