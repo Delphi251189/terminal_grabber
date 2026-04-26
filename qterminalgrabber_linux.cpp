@@ -49,7 +49,6 @@ void QTerminalGrabber::setTerminalSize(int rows, int cols) {
     ioctl(d->m_masterFd, TIOCSWINSZ, &ws);
 }
 
-
 bool QTerminalGrabber::startShell(const QString &program)
 {
     int slaveFd;
