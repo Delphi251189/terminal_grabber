@@ -3,6 +3,9 @@ CONFIG      += c++11
 HEADERS     +=  qterminalgrabber.h mainwindow.h
 SOURCES     += main.cpp  mainwindow.cpp
 
+windows {
+    SOURCES += qterminalgrabber_windows.cpp
+}
 
 linux:!android {
     SOURCES += qterminalgrabber_linux.cpp

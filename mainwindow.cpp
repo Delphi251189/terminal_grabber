@@ -13,6 +13,8 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     grabber->startShell("/bin/zsh");
 #elif defined(Q_OS_UNIX)
     grabber->startShell("/bin/bash");
+#elif defined(Q_OS_WIN)
+    grabber->startShell("cmd.exe");
 #else
 
 #endif
