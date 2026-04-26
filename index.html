@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Remote Terminal</title>
+
+<link rel="stylesheet"  href="https://cdn.jsdelivr.net/npm/xterm/css/xterm.css" />
+
+<style>
+    html, body { margin: 0; height: 100%; background: black; }
+    #terminal { width: 100%; height: 100%; }
+    @font-face {
+        font-family: "FiraCodeNF";
+        src: url("https://cdn.jsdelivr.net/gh/ryanoasis/nerd-fonts@3.0.2/patched-fonts/FiraCode/Regular/FiraCodeNerdFont-Regular.ttf");
+    }
+
+    .xterm {
+        font-family: "FiraCodeNF", monospace;
+    }
+</style>
+</head>
+<body>
+
+<div id="terminal"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/xterm/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit/lib/xterm-addon-fit.js"></script>
+
+<script>
+    const term = new Terminal({
+        cursorBlink: true,
+        scrollback: 2000,
+
+        fontFamily: "FiraCodeNF, monospace",
+        fontSize: 14
+
+    });
+
+    const fitAddon = new FitAddon.FitAddon();
+    term.loadAddon(fitAddon);
+
+    term.open(document.getElementById('terminal'));
+    fitAddon.fit();
+
+    const socket = new WebSocket("ws://127.0.0.1:12345");
+    socket.binaryType = "arraybuffer";
+
+    socket.onopen = () => {
+        console.log("Connected");
+        sendResize();
+        socket.send('\n')
+    };
+
+    socket.onmessage = (event) => {
+        if (event.data instanceof ArrayBuffer) {
+            term.write(new Uint8Array(event.data));
+        } else {
+            term.write(event.data);
+        }
+    };
+
+    socket.onclose = () => { term.write("\r\n[Disconnected]\r\n"); };
+
+    socket.onerror = (e) => { console.error("WebSocket error", e); };
+
+    term.onData(data => { socket.send(data); });
+
+    function sendResize() {
+        const size = { action: "resize", cols: term.cols, rows: term.rows };
+        socket.send(JSON.stringify(size));
+    }
+
+    term.onResize(() => { sendResize(); });
+
+    window.addEventListener("resize", () => { fitAddon.fit(); sendResize(); });
+</script>
+
+</body>
+</html>
