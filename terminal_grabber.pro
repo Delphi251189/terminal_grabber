@@ -6,7 +6,10 @@ qtHaveModule(httpserver) : QT += httpserver
 
 
 windows {
-    SOURCES += qterminalgrabber_windows.cpp
+    INCLUDEPATH     += $${PWD}/winpty/include
+    QMAKE_LIBDIR    += $${PWD}/winpty/x64/lib
+    LIBS            += -lwinpty
+    SOURCES         += qterminalgrabber_windows.cpp
 }
 
 linux:!android {

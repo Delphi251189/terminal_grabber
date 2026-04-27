@@ -1,154 +1,217 @@
 #include "qterminalgrabber.h"
 
+#ifdef Q_OS_WIN
+
 #include <windows.h>
-#include <QWinEventNotifier>
 #include <QByteArray>
+#include <QMetaObject>
 #include <QDebug>
+
+#include <atomic>
+
+// winpty
+#include "winpty.h"
+
+static void printWinptyError(winpty_error_ptr_t err)
+{
+    if (!err)
+        return;
+
+    qDebug() << "winpty error:" << QString::fromWCharArray(winpty_error_msg(err));
+}
 
 struct QTerminalGrabberPrivate
 {
-    HPCON hPC = nullptr;
+    winpty_t *pty = nullptr;
+    winpty_config_t *config = nullptr;
+    winpty_spawn_config_t *spawnConfig = nullptr;
 
-    HANDLE hInputWrite = NULL;
-    HANDLE hOutputRead = NULL;
+    HANDLE hIn = NULL;
+    HANDLE hOut = NULL;
 
-    PROCESS_INFORMATION pi{};
+    HANDLE hThread = NULL;
+    std::atomic<bool> running{false};
 
-    QWinEventNotifier *notifier = nullptr;
+    QTerminalGrabber *q = nullptr;
 };
 
-static bool createPipePair(HANDLE &readPipe, HANDLE &writePipe)
+// ---------------- Reader Thread ----------------
+
+static DWORD WINAPI ReaderThread(LPVOID param)
 {
-    SECURITY_ATTRIBUTES sa{sizeof(SECURITY_ATTRIBUTES), NULL, TRUE};
-    return CreatePipe(&readPipe, &writePipe, &sa, 0);
+    QTerminalGrabberPrivate *d = (QTerminalGrabberPrivate*)param;
+
+    char buffer[4096];
+    DWORD read = 0;
+
+    while (d->running)
+    {
+        if (ReadFile(d->hOut, buffer, sizeof(buffer), &read, NULL) && read > 0)
+        {
+            QByteArray data(buffer, read);
+
+            QMetaObject::invokeMethod(
+                d->q,
+                "readyRead",
+                Qt::QueuedConnection,
+                Q_ARG(QByteArray, data)
+            );
+        }
+        else
+        {
+            break;
+        }
+    }
+
+    return 0;
 }
 
+// ---------------- ctor / dtor ----------------
+
 QTerminalGrabber::QTerminalGrabber(QObject *parent)
-    : QObject(parent), d(new QTerminalGrabberPrivate)
+    : QObject(parent)
 {
+    d = new QTerminalGrabberPrivate;
+    d->q = this;
 }
 
 QTerminalGrabber::~QTerminalGrabber()
 {
-    if (d->notifier)
-        d->notifier->deleteLater();
+    d->running = false;
 
-    if (d->hInputWrite)
-        CloseHandle(d->hInputWrite);
+    if (d->hOut)
+        CloseHandle(d->hOut);
 
-    if (d->hOutputRead)
-        CloseHandle(d->hOutputRead);
+    if (d->hThread)
+        WaitForSingleObject(d->hThread, INFINITE);
 
-    if (d->hPC)
-        ClosePseudoConsole(d->hPC);
+    if (d->hIn)
+        CloseHandle(d->hIn);
 
-    if (d->pi.hProcess)
-        CloseHandle(d->pi.hProcess);
+    if (d->pty)
+        winpty_free(d->pty);
 
-    if (d->pi.hThread)
-        CloseHandle(d->pi.hThread);
+    if (d->spawnConfig)
+        winpty_spawn_config_free(d->spawnConfig);
+
+    if (d->config)
+        winpty_config_free(d->config);
 
     delete d;
 }
 
+// ---------------- startShell ----------------
+
 bool QTerminalGrabber::startShell(const QString &program)
 {
-    if (d->hPC)
-        return false;
+    winpty_error_ptr_t err = nullptr;
 
-    HANDLE inPipeRead, inPipeWrite;
-    HANDLE outPipeRead, outPipeWrite;
-
-    if (!createPipePair(inPipeRead, inPipeWrite))
-        return false;
-
-    if (!createPipePair(outPipeRead, outPipeWrite))
-        return false;
-
-    COORD size{80, 24};
-
-    HRESULT hr = CreatePseudoConsole(size, inPipeRead, outPipeWrite, 0, &d->hPC);
-    if (FAILED(hr)) {
-        qWarning() << "CreatePseudoConsole failed";
+    // 1. Create config
+    d->config = winpty_config_new(0, &err);
+    if (!d->config) {
+        qWarning() << "winpty_config_new failed";
         return false;
     }
 
-    // We don't need these ends anymore
-    CloseHandle(inPipeRead);
-    CloseHandle(outPipeWrite);
+    winpty_config_set_initial_size(d->config, 80, 24);
 
-    d->hInputWrite = inPipeWrite;
-    d->hOutputRead = outPipeRead;
+    // 2. Open pty
+    d->pty = winpty_open(d->config, &err);
+    if (!d->pty) {
+        qWarning() << "winpty_open failed";
+        return false;
+    }
 
-    // Enable UTF-8 in child
-    SetConsoleOutputCP(CP_UTF8);
-    SetConsoleCP(CP_UTF8);
-
-    STARTUPINFOEXW si{};
-    si.StartupInfo.cb = sizeof(STARTUPINFOEXW);
-
-    SIZE_T attrListSize = 0;
-    InitializeProcThreadAttributeList(NULL, 1, 0, &attrListSize);
-
-    si.lpAttributeList = (PPROC_THREAD_ATTRIBUTE_LIST)malloc(attrListSize);
-    InitializeProcThreadAttributeList(si.lpAttributeList, 1, 0, &attrListSize);
-
-    UpdateProcThreadAttribute(
-        si.lpAttributeList,
-        0,
-        PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
-        d->hPC,
-        sizeof(HPCON),
-        NULL,
-        NULL
-    );
-
+    // 3. Prepare command
     QString cmd = program.isEmpty() ? "cmd.exe" : program;
+
     std::wstring wcmd = cmd.toStdWString();
 
-    if (!CreateProcessW(NULL, (LPWSTR)wcmd.data(), NULL, NULL, FALSE, EXTENDED_STARTUPINFO_PRESENT, NULL, NULL, &si.StartupInfo, &d->pi))
-    {
-        qWarning() << "CreateProcess failed";
+    // 4. Spawn config
+    d->spawnConfig = winpty_spawn_config_new(
+        WINPTY_SPAWN_FLAG_AUTO_SHUTDOWN,
+        wcmd.c_str(),
+        NULL,
+        NULL,
+        NULL,
+        &err
+    );
+
+    if (!d->spawnConfig) {
+        printWinptyError(err);
         return false;
     }
 
-    // Setup async read
-    d->notifier = new QWinEventNotifier(d->hOutputRead, this);
+    HANDLE childProcess = NULL;
+    HANDLE childThread = NULL;
 
-    connect(d->notifier, &QWinEventNotifier::activated, this, [this]() {
-        char buffer[4096];
-        DWORD read = 0;
+    BOOL ok = winpty_spawn(d->pty, d->spawnConfig, &childProcess, &childThread, NULL, &err );
 
-        if (ReadFile(d->hOutputRead, buffer, sizeof(buffer), &read, NULL) && read > 0) {
-            emit readyRead(QByteArray(buffer, read));
-        }
-    });
+    if (!ok) {
+        qWarning() << "winpty_spawn failed";
+        printWinptyError(err);
+        return false;
+    }
+
+    if (childProcess)
+        CloseHandle(childProcess);
+    if (childThread)
+        CloseHandle(childThread);
+
+    // 5. Get pipes
+    LPCWSTR conin = winpty_conin_name(d->pty);
+    LPCWSTR conout = winpty_conout_name(d->pty);
+
+    d->hIn = CreateFileW(conin, GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    d->hOut = CreateFileW(conout, GENERIC_READ, 0, NULL, OPEN_EXISTING, 0, NULL);
+
+    if (d->hIn == INVALID_HANDLE_VALUE || d->hOut == INVALID_HANDLE_VALUE) {
+        qWarning() << "Failed to open winpty pipes";
+        return false;
+    }
+
+    // 6. Start reader thread
+    d->running = true;
+
+    d->hThread = CreateThread(
+        NULL,
+        0,
+        ReaderThread,
+        d,
+        0,
+        NULL
+    );
 
     return true;
 }
 
+// ---------------- sendInput ----------------
+
 void QTerminalGrabber::sendInput(const QByteArray &data)
 {
-    if (!d->hInputWrite)
+    if (!d->hIn)
         return;
 
     DWORD written = 0;
-    WriteFile(d->hInputWrite, data.data(), data.size(), &written, NULL);
+    WriteFile(d->hIn, data.data(), (DWORD)data.size(), &written, NULL);
 }
+
+// ---------------- resize ----------------
 
 void QTerminalGrabber::setTerminalSize(int rows, int cols)
 {
-    if (!d->hPC)
+    if (!d->pty)
         return;
 
-    ResizePseudoConsole(d->hPC, COORD{(SHORT)cols, (SHORT)rows});
+    winpty_set_size(d->pty, cols, rows, NULL);
 }
+
+// ---------------- sendKey ----------------
 
 void QTerminalGrabber::sendKey(Qt::Key key, Qt::KeyboardModifiers mods)
 {
     QByteArray seq;
 
-    // Ctrl handling
     if (mods & Qt::ControlModifier) {
         if (key >= Qt::Key_A && key <= Qt::Key_Z) {
             char ctrl = (key - Qt::Key_A) + 1;
@@ -185,9 +248,9 @@ void QTerminalGrabber::sendKey(Qt::Key key, Qt::KeyboardModifiers mods)
         break;
     default:
         if (key >= Qt::Key_Space && key <= Qt::Key_AsciiTilde) {
-            char c = static_cast<char>(key);
+            char c = (char)key;
             if (!(mods & Qt::ShiftModifier))
-                c = QChar(c).toLower().toLatin1();
+                c = (char)tolower(c);
             seq.append(c);
         } else {
             return;
@@ -196,3 +259,5 @@ void QTerminalGrabber::sendKey(Qt::Key key, Qt::KeyboardModifiers mods)
 
     sendInput(seq);
 }
+
+#endif
