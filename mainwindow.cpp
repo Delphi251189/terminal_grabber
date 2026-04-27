@@ -10,6 +10,9 @@
 #include <QTcpServer>
 #endif
 
+#include "qscreengrabber.h"
+#include "qscreenviewer.h"
+
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWindow), socket(nullptr)
 {
     ui->setupUi(this);
@@ -29,7 +32,42 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     server->listen(QHostAddress::Any, 12345);
     connect(server, &QWebSocketServer::newConnection , this, &MainWindow::onNewConnection);
 
+    initHttpServer();
+    initScreenGrabber();
 
+
+}
+
+MainWindow::~MainWindow()
+{
+    delete ui;
+}
+
+void MainWindow::keyPressEvent(QKeyEvent *event)
+{
+    grabber->sendKey((Qt::Key)event->key(), event->modifiers());
+}
+
+void MainWindow::initScreenGrabber()
+{
+    auto sg = new QScreenGrabber(this);
+    auto sv = new QScreenViewer(this);
+
+    connect(sg, &QScreenGrabber::messageReady, sv, &QScreenViewer::processMessage);
+    connect(sv, &QScreenViewer::frameChanged, [&](const QImage &img){
+
+        ui->label->setPixmap(QPixmap::fromImage(img));
+    });
+
+    sg->setFrameSize(QSize(800,600));
+    sg->setQuality(5);
+    sg->setFramesPerSecond(5);
+
+
+}
+
+void MainWindow::initHttpServer()
+{
 #if QT_VERSION >= QT_VERSION_CHECK(6,0,0)
     auto server = new QHttpServer(this);
 
@@ -50,18 +88,6 @@ MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent), ui(new Ui::MainWi
     server->bind(tcpserver);
 
 #endif
-
-
-}
-
-MainWindow::~MainWindow()
-{
-    delete ui;
-}
-
-void MainWindow::keyPressEvent(QKeyEvent *event)
-{
-    grabber->sendKey((Qt::Key)event->key(), event->modifiers());
 }
 
 void MainWindow::onNewConnection()

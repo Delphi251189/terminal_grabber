@@ -1,7 +1,11 @@
 QT          += core gui widgets network websockets
 CONFIG      += c++11
-HEADERS     +=  qterminalgrabber.h mainwindow.h
-SOURCES     += main.cpp  mainwindow.cpp
+HEADERS     +=  qterminalgrabber.h mainwindow.h \
+    qscreengrabber.h \
+    qscreenviewer.h
+SOURCES     += main.cpp  mainwindow.cpp \
+    qscreengrabber.cpp \
+    qscreenviewer.cpp
 qtHaveModule(httpserver) : QT += httpserver
 
 

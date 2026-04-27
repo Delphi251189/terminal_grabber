@@ -19,6 +19,8 @@ public:
     ~MainWindow();
     void keyPressEvent(QKeyEvent *event) override;
 public slots:
+    void initScreenGrabber();
+    void initHttpServer();
     void onNewConnection();
     void onGrabberMessage(const QByteArray &data);
     void onSocketMessage(const QByteArray &data);
