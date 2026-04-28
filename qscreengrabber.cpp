@@ -26,14 +26,14 @@ void QScreenGrabber::setFramesPerSecond(int fps)
 void QScreenGrabber::setQuality(int q)
 {
     m_quality = qBound(0, q, 10);
+    if (m_quality >= 6) { m_format = PF_RGB16; }
+    else if (m_quality >= 3) { m_format = PF_INDEX8; }
+    else { m_format = PF_GRAY8; }
 }
 
 void QScreenGrabber::timerEvent(QTimerEvent *e)
 {
-    if (e->timerId() != m_timerid)
-    {
-        return;
-    }
+    if (e->timerId() != m_timerid) { return; }
     grabFrame();
     convertQuality();
     buildMessage();

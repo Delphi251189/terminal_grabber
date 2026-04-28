@@ -61,7 +61,7 @@ void MainWindow::initScreenGrabber()
 
     sg->setFrameSize(QSize(800,600));
     sg->setQuality(5);
-    sg->setFramesPerSecond(5);
+    sg->setFramesPerSecond(10);
 
 
 }
